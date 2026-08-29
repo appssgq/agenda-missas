@@ -3,7 +3,12 @@ import cron from "node-cron";
 import path from "path";
 import { fileURLToPath } from "url";
 
-const req=n=>{const v=process.env[n];if(!v)throw new Error(`Variável ausente: ${n}`);return v};
+const req=n=>{
+  const v=process.env[n];
+  if(!v)throw new Error(`Variável ausente: ${n}`);
+  return v;
+};
+
 const SUPABASE_URL=req("SUPABASE_URL").replace(/\/+$/,"");
 const SUPABASE_SERVICE_KEY=req("SUPABASE_SERVICE_KEY");
 const EVOLUTION_URL=req("EVOLUTION_URL").replace(/\/+$/,"");
@@ -23,11 +28,19 @@ function agora(){
   const p=Object.fromEntries(
     new Intl.DateTimeFormat("en-CA",{
       timeZone:TIMEZONE,
-      year:"numeric",month:"2-digit",day:"2-digit",
-      hour:"2-digit",minute:"2-digit",hourCycle:"h23"
+      year:"numeric",
+      month:"2-digit",
+      day:"2-digit",
+      hour:"2-digit",
+      minute:"2-digit",
+      hourCycle:"h23"
     }).formatToParts(new Date()).map(x=>[x.type,x.value])
   );
-  return {data:`${p.year}-${p.month}-${p.day}`,hora:`${p.hour}:${p.minute}`};
+
+  return {
+    data:`${p.year}-${p.month}-${p.day}`,
+    hora:`${p.hour}:${p.minute}`
+  };
 }
 
 function dataBR(d){
@@ -37,76 +50,165 @@ function dataBR(d){
 
 function menosDias(data,dias){
   const [a,m,d]=data.split("-").map(Number);
-  const x=new Date(Date.UTC(a,m-1,d));
-  x.setUTCDate(x.getUTCDate()-Number(dias));
+
+  const x=new Date(
+    Date.UTC(a,m-1,d)
+  );
+
+  x.setUTCDate(
+    x.getUTCDate()-Number(dias)
+  );
+
   return x.toISOString().slice(0,10);
 }
 
 function menosMinutos(data,hora,minutos){
   const [a,m,d]=data.split("-").map(Number);
-  const [h,min]=String(hora).slice(0,5).split(":").map(Number);
-  const x=new Date(Date.UTC(a,m-1,d,h,min));
-  x.setUTCMinutes(x.getUTCMinutes()-minutos);
-  return {data:x.toISOString().slice(0,10),hora:x.toISOString().slice(11,16)};
+
+  const [h,min]=String(hora)
+    .slice(0,5)
+    .split(":")
+    .map(Number);
+
+  const x=new Date(
+    Date.UTC(a,m-1,d,h,min)
+  );
+
+  x.setUTCMinutes(
+    x.getUTCMinutes()-minutos
+  );
+
+  return {
+    data:x.toISOString().slice(0,10),
+    hora:x.toISOString().slice(11,16)
+  };
 }
 
 async function missasAtivas(){
+
   const hoje=agora().data;
-  const url=`${SUPABASE_URL}/rest/v1/missas?select=*&ativo=eq.true&data_missa=gte.${hoje}&order=data_missa.asc,horario.asc`;
-  const r=await fetch(url,{headers:sbHeaders});
-  if(!r.ok)throw new Error(await r.text());
+
+  const url=
+    `${SUPABASE_URL}/rest/v1/missas`+
+    `?select=*`+
+    `&ativo=eq.true`+
+    `&data_missa=gte.${hoje}`+
+    `&order=data_missa.asc,horario.asc`;
+
+  const r=await fetch(
+    url,
+    {headers:sbHeaders}
+  );
+
+  if(!r.ok){
+    throw new Error(
+      await r.text()
+    );
+  }
+
   return r.json();
 }
 
 function chave(a){
+
   return `${a.unidade||"dias"}:${Number(a.quantidade)}:${a.horario||""}`;
 }
 
 async function jaEnviado(missaId,aviso){
+
   const url=
     `${SUPABASE_URL}/rest/v1/lembretes_missas`+
-    `?select=id&missa_id=eq.${encodeURIComponent(missaId)}`+
+    `?select=id`+
+    `&missa_id=eq.${encodeURIComponent(missaId)}`+
     `&chave_aviso=eq.${encodeURIComponent(chave(aviso))}`+
-    `&enviado=eq.true&limit=1`;
+    `&enviado=eq.true`+
+    `&limit=1`;
 
-  const r=await fetch(url,{headers:sbHeaders});
-  if(!r.ok)throw new Error(await r.text());
+  const r=await fetch(
+    url,
+    {headers:sbHeaders}
+  );
+
+  if(!r.ok){
+    throw new Error(
+      await r.text()
+    );
+  }
+
   return (await r.json()).length>0;
 }
 
 async function registrar(missaId,aviso){
+
   const a=agora();
 
-  const r=await fetch(`${SUPABASE_URL}/rest/v1/lembretes_missas`,{
-    method:"POST",
-    headers:{...sbHeaders,Prefer:"return=minimal"},
-    body:JSON.stringify({
-      missa_id:missaId,
-      dias_antes:aviso.unidade==="dias"?Number(aviso.quantidade):0,
-      data_envio:a.data,
-      horario_envio:`${a.hora}:00`,
-      enviado:true,
-      enviado_em:new Date().toISOString(),
-      chave_aviso:chave(aviso)
-    })
-  });
+  const r=await fetch(
+    `${SUPABASE_URL}/rest/v1/lembretes_missas`,
+    {
+      method:"POST",
 
-  if(!r.ok)throw new Error(await r.text());
+      headers:{
+        ...sbHeaders,
+        Prefer:"return=minimal"
+      },
+
+      body:JSON.stringify({
+
+        missa_id:missaId,
+
+        dias_antes:
+          aviso.unidade==="dias"
+            ?Number(aviso.quantidade)
+            :0,
+
+        data_envio:a.data,
+
+        horario_envio:
+          `${a.hora}:00`,
+
+        enviado:true,
+
+        enviado_em:
+          new Date().toISOString(),
+
+        chave_aviso:
+          chave(aviso)
+      })
+    }
+  );
+
+  if(!r.ok){
+    throw new Error(
+      await r.text()
+    );
+  }
 }
 
 function descricao(a){
+
   const q=Number(a.quantidade);
 
-  if(a.unidade==="dias")
-    return q===1?"Falta 1 dia":`Faltam ${q} dias`;
+  if(a.unidade==="dias"){
 
-  if(a.unidade==="horas")
-    return q===1?"Falta 1 hora":`Faltam ${q} horas`;
+    return q===1
+      ?"Falta 1 dia"
+      :`Faltam ${q} dias`;
+  }
 
-  return q===1?"Falta 1 minuto":`Faltam ${q} minutos`;
+  if(a.unidade==="horas"){
+
+    return q===1
+      ?"Falta 1 hora"
+      :`Faltam ${q} horas`;
+  }
+
+  return q===1
+    ?"Falta 1 minuto"
+    :`Faltam ${q} minutos`;
 }
 
 async function enviar(missa,aviso){
+
   let texto=
 `⛪ Lembrete de Missa
 
@@ -115,18 +217,22 @@ async function enviar(missa,aviso){
 ⏰ Horário: ${String(missa.horario).slice(0,5)}
 📍 Local: ${missa.local}`;
 
-  if(missa.observacao)texto+=`\n📝 ${missa.observacao}`;
+  if(missa.observacao){
+    texto+=`\n📝 ${missa.observacao}`;
+  }
 
-  texto+=`\n🙏 Contamos com a presença de todos!`;
+  texto+=`\n\nConfirme sua presença aqui se estará conosco 👇🏽`;
 
   const r=await fetch(
     `${EVOLUTION_URL}/message/sendText/${EVOLUTION_INSTANCE}`,
     {
       method:"POST",
+
       headers:{
         "Content-Type":"application/json",
         apikey:EVOLUTION_API_KEY
       },
+
       body:JSON.stringify({
         number:GROUP_JID,
         text:texto
@@ -134,115 +240,329 @@ async function enviar(missa,aviso){
     }
   );
 
-  if(!r.ok)throw new Error(await r.text());
+  if(!r.ok){
+    throw new Error(
+      await r.text()
+    );
+  }
 }
 
 function momento(missa,aviso){
-  const q=Number(aviso.quantidade);
-  if(!q||q<1)return null;
+
+  const q=Number(
+    aviso.quantidade
+  );
+
+  if(!q||q<1){
+    return null;
+  }
 
   if(aviso.unidade==="dias"){
-    if(!aviso.horario)return null;
+
+    if(!aviso.horario){
+      return null;
+    }
 
     return {
-      data:menosDias(missa.data_missa,q),
-      hora:String(aviso.horario).slice(0,5)
+      data:menosDias(
+        missa.data_missa,
+        q
+      ),
+
+      hora:String(
+        aviso.horario
+      ).slice(0,5)
     };
   }
 
-  const min=aviso.unidade==="horas"?q*60:q;
-  return menosMinutos(missa.data_missa,missa.horario,min);
+  const min=
+    aviso.unidade==="horas"
+      ?q*60
+      :q;
+
+  return menosMinutos(
+    missa.data_missa,
+    missa.horario,
+    min
+  );
 }
 
 async function executar(){
-  try{
-    const a=agora();
-    console.log(`Verificando avisos ${a.data} ${a.hora}`);
 
-    const missas=await missasAtivas();
+  try{
+
+    const a=agora();
+
+    console.log(
+      `Verificando avisos ${a.data} ${a.hora}`
+    );
+
+    const missas=
+      await missasAtivas();
 
     for(const missa of missas){
-      const avisos=Array.isArray(missa.avisos)?missa.avisos:[];
+
+      const avisos=
+        Array.isArray(missa.avisos)
+          ?missa.avisos
+          :[];
 
       for(const aviso of avisos){
-        const m=momento(missa,aviso);
 
-        if(!m)continue;
-        if(m.data!==a.data||m.hora!==a.hora)continue;
-        if(await jaEnviado(missa.id,aviso))continue;
+        const m=
+          momento(
+            missa,
+            aviso
+          );
 
-        await enviar(missa,aviso);
-        await registrar(missa.id,aviso);
+        if(!m){
+          continue;
+        }
 
-        console.log(`Enviado: ${missa.id} ${chave(aviso)}`);
+        if(
+          m.data!==a.data ||
+          m.hora!==a.hora
+        ){
+          continue;
+        }
+
+        if(
+          await jaEnviado(
+            missa.id,
+            aviso
+          )
+        ){
+          continue;
+        }
+
+        await enviar(
+          missa,
+          aviso
+        );
+
+        await registrar(
+          missa.id,
+          aviso
+        );
+
+        console.log(
+          `Enviado: ${missa.id} ${chave(aviso)}`
+        );
       }
     }
+
   }catch(e){
-    console.error("Erro no agendador:",e.message);
+
+    console.error(
+      "Erro no agendador:",
+      e.message
+    );
   }
 }
 
-cron.schedule("* * * * *",executar,{timezone:TIMEZONE});
+/*
+  Verifica os avisos
+  uma vez por minuto
+*/
+
+cron.schedule(
+  "* * * * *",
+  executar,
+  {
+    timezone:TIMEZONE
+  }
+);
+
+/* =========================
+   SERVIDOR
+========================= */
 
 const app=express();
-app.use(express.json());
 
-app.get("/api/missas",async(req,res)=>{
-  try{
-    const hoje=agora().data;
-    const r=await fetch(
-      `${SUPABASE_URL}/rest/v1/missas?select=*&data_missa=gte.${hoje}&order=data_missa.asc,horario.asc`,
-      {headers:sbHeaders}
-    );
+app.use(
+  express.json()
+);
 
-    const dados=await r.json();
+/* =========================
+   LISTAR MISSAS
+========================= */
 
-    if(!r.ok)
-      return res.status(r.status).json({erro:dados.message||"Erro ao buscar missas."});
+app.get(
+  "/api/missas",
+  async(req,res)=>{
 
-    res.json(dados);
-  }catch(e){
-    res.status(500).json({erro:e.message});
+    try{
+
+      const hoje=
+        agora().data;
+
+      const r=
+        await fetch(
+          `${SUPABASE_URL}/rest/v1/missas?select=*&data_missa=gte.${hoje}&order=data_missa.asc,horario.asc`,
+          {
+            headers:sbHeaders
+          }
+        );
+
+      const dados=
+        await r.json();
+
+      if(!r.ok){
+
+        return res
+          .status(r.status)
+          .json({
+            erro:
+              dados.message||
+              "Erro ao buscar missas."
+          });
+      }
+
+      res.json(dados);
+
+    }catch(e){
+
+      res
+        .status(500)
+        .json({
+          erro:e.message
+        });
+    }
   }
-});
+);
 
-app.post("/api/missas",async(req,res)=>{
-  try{
-    const {data_missa,horario,local,observacao,avisos}=req.body||{};
+/* =========================
+   CADASTRAR MISSA
+========================= */
 
-    if(!data_missa||!horario||!local)
-      return res.status(400).json({erro:"Data, horário e local são obrigatórios."});
+app.post(
+  "/api/missas",
+  async(req,res)=>{
 
-    const r=await fetch(`${SUPABASE_URL}/rest/v1/missas`,{
-      method:"POST",
-      headers:{...sbHeaders,Prefer:"return=representation"},
-      body:JSON.stringify({
+    try{
+
+      const {
         data_missa,
         horario,
         local,
-        observacao:observacao||null,
-        avisos:Array.isArray(avisos)?avisos:[],
-        ativo:true
-      })
-    });
+        observacao,
+        avisos
+      }=req.body||{};
 
-    const dados=await r.json();
+      if(
+        !data_missa||
+        !horario||
+        !local
+      ){
 
-    if(!r.ok)
-      return res.status(r.status).json({erro:dados.message||"Erro ao cadastrar missa."});
+        return res
+          .status(400)
+          .json({
+            erro:
+              "Data, horário e local são obrigatórios."
+          });
+      }
 
-    res.status(201).json(dados);
-  }catch(e){
-    res.status(500).json({erro:e.message});
+      const r=
+        await fetch(
+          `${SUPABASE_URL}/rest/v1/missas`,
+          {
+            method:"POST",
+
+            headers:{
+              ...sbHeaders,
+              Prefer:
+                "return=representation"
+            },
+
+            body:JSON.stringify({
+
+              data_missa,
+
+              horario,
+
+              local,
+
+              observacao:
+                observacao||null,
+
+              avisos:
+                Array.isArray(avisos)
+                  ?avisos
+                  :[],
+
+              ativo:true
+            })
+          }
+        );
+
+      const dados=
+        await r.json();
+
+      if(!r.ok){
+
+        return res
+          .status(r.status)
+          .json({
+            erro:
+              dados.message||
+              "Erro ao cadastrar missa."
+          });
+      }
+
+      res
+        .status(201)
+        .json(dados);
+
+    }catch(e){
+
+      res
+        .status(500)
+        .json({
+          erro:e.message
+        });
+    }
   }
-});
+);
 
-const __filename=fileURLToPath(import.meta.url);
-const __dirname=path.dirname(__filename);
+/* =========================
+   HTML
+========================= */
 
-app.use(express.static(path.join(__dirname,"public")));
+const __filename=
+  fileURLToPath(
+    import.meta.url
+  );
 
-app.listen(PORT,"0.0.0.0",()=>{
-  console.log(`Agenda de Missas ativa. Avisos verificados a cada minuto (${TIMEZONE}).`);
-  console.log(`Tela disponível na porta ${PORT}.`);
-});
+const __dirname=
+  path.dirname(
+    __filename
+  );
+
+app.use(
+  express.static(
+    path.join(
+      __dirname,
+      "public"
+    )
+  )
+);
+
+/* =========================
+   INICIAR
+========================= */
+
+app.listen(
+  PORT,
+  "0.0.0.0",
+  ()=>{
+
+    console.log(
+      `Agenda de Missas ativa. Avisos verificados a cada minuto (${TIMEZONE}).`
+    );
+
+    console.log(
+      `Tela disponível na porta ${PORT}.`
+    );
+  }
+);
