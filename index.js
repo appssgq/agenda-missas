@@ -1,12 +1,16 @@
+import express from "express";
 import cron from "node-cron";
+import path from "path";
+import { fileURLToPath } from "url";
 
-const SUPABASE_URL = required("SUPABASE_URL").replace(/\/+$/, "");
+const SUPABASE_URL = required("SUPABASE_URL").replace(/\/$/, "");
 const SUPABASE_SERVICE_KEY = required("SUPABASE_SERVICE_KEY");
-const EVOLUTION_URL = required("EVOLUTION_URL").replace(/\/+$/, "");
+const EVOLUTION_URL = required("EVOLUTION_URL").replace(/\/$/, "");
 const EVOLUTION_API_KEY = required("EVOLUTION_API_KEY");
-const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || "agenda-missas";
+const EVOLUTION_INSTANCE = required("EVOLUTION_INSTANCE");
 const GROUP_JID = required("GROUP_JID");
 const TIMEZONE = process.env.TIMEZONE || "America/Sao_Paulo";
+const PORT = process.env.PORT || 3000;
 
 function required(name) {
   const value = process.env[name];
@@ -20,149 +24,243 @@ const sbHeaders = {
   "Content-Type": "application/json"
 };
 
-function todayISO() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(new Date());
-
-  const p = Object.fromEntries(parts.map(x => [x.type, x.value]));
-  return `${p.year}-${p.month}-${p.day}`;
+function diasEntre(hoje, dataMissa) {
+  const a = new Date(`${hoje}T00:00:00`);
+  const b = new Date(`${dataMissa}T00:00:00`);
+  return Math.round((b - a) / 86400000);
 }
 
-function daysBetween(today, future) {
-  const [y1, m1, d1] = today.split("-").map(Number);
-  const [y2, m2, d2] = future.split("-").map(Number);
-  return Math.round(
-    (Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000
-  );
+function formatarDataBR(data) {
+  const [ano, mes, dia] = data.split("-");
+  return `${dia}/${mes}`;
 }
 
-function brDate(iso) {
-  const [y, m, d] = iso.split("-");
-  return `${d}/${m}/${y}`;
-}
-
-function hhmm(value) {
-  return String(value || "").slice(0, 5);
-}
-
-async function supabaseGet(path) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: sbHeaders
+async function buscarMissasAtivas() {
+  const hoje = new Date().toLocaleDateString("sv-SE", {
+    timeZone: TIMEZONE
   });
-  if (!res.ok) throw new Error(`Supabase GET ${res.status}: ${await res.text()}`);
-  return res.json();
+
+  const url =
+    `${SUPABASE_URL}/rest/v1/missas` +
+    `?select=*` +
+    `&ativo=eq.true` +
+    `&data_missa=gte.${hoje}` +
+    `&order=data_missa.asc,horario.asc`;
+
+  const resposta = await fetch(url, { headers: sbHeaders });
+
+  if (!resposta.ok) {
+    throw new Error(await resposta.text());
+  }
+
+  return resposta.json();
 }
 
-async function supabaseInsert(table, body) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-    method: "POST",
-    headers: {
-      ...sbHeaders,
-      Prefer: "return=representation"
-    },
-    body: JSON.stringify(body)
-  });
-  if (!res.ok) throw new Error(`Supabase POST ${res.status}: ${await res.text()}`);
-  return res.json();
+async function lembreteJaEnviado(missaId, diasAntes) {
+  const url =
+    `${SUPABASE_URL}/rest/v1/lembretes_missas` +
+    `?select=id` +
+    `&missa_id=eq.${missaId}` +
+    `&dias_antes=eq.${diasAntes}` +
+    `&limit=1`;
+
+  const resposta = await fetch(url, { headers: sbHeaders });
+
+  if (!resposta.ok) {
+    throw new Error(await resposta.text());
+  }
+
+  const dados = await resposta.json();
+  return dados.length > 0;
 }
 
-async function reminderAlreadySent(missaId, diasAntes) {
-  const rows = await supabaseGet(
-    `lembretes_missas?select=id&missa_id=eq.${encodeURIComponent(missaId)}&dias_antes=eq.${diasAntes}&enviado=eq.true&limit=1`
-  );
-  return rows.length > 0;
-}
-
-async function sendWhatsApp(text) {
-  const res = await fetch(
-    `${EVOLUTION_URL}/message/sendText/${encodeURIComponent(EVOLUTION_INSTANCE)}`,
+async function registrarLembrete(missaId, diasAntes) {
+  const resposta = await fetch(
+    `${SUPABASE_URL}/rest/v1/lembretes_missas`,
     {
       method: "POST",
       headers: {
-        apikey: EVOLUTION_API_KEY,
-        "Content-Type": "application/json"
+        ...sbHeaders,
+        Prefer: "return=minimal"
       },
       body: JSON.stringify({
-        number: GROUP_JID,
-        text
+        missa_id: missaId,
+        dias_antes: diasAntes
       })
     }
   );
 
-  if (!res.ok) {
-    throw new Error(`Evolution API ${res.status}: ${await res.text()}`);
+  if (!resposta.ok) {
+    throw new Error(await resposta.text());
   }
 }
 
-function messageFor(missa, dias) {
-  const quando = dias === 1 ? "Falta 1 dia" : `Faltam ${dias} dias`;
+async function enviarWhatsApp(missa, diasAntes) {
+  const horario = String(missa.horario || "").slice(0, 5);
 
-  let text =
-`⛪ *Lembrete de Missa*
+  const texto =
+`⛪ Lembrete de Missa
 
-📅 ${quando} para a missa.
-🗓️ Data: ${brDate(missa.data_missa)}
-⏰ Horário: ${hhmm(missa.horario)}
-📍 Local: ${missa.local}`;
+📅 Faltam ${diasAntes} dias para a missa.
+🗓️ Data: ${formatarDataBR(missa.data_missa)}
+⏰ Horário: ${horario}
+📍 Local: ${missa.local}
+🙏 Contamos com a presença de todos!`;
 
-  if (missa.observacao) {
-    text += `\n📝 ${missa.observacao}`;
-  }
-
-  text += `\n🙏 Contamos com a presença de todos!`;
-  return text;
-}
-
-async function runCheck() {
-  const hoje = todayISO();
-  console.log(`[${new Date().toISOString()}] Verificando agenda. Data local: ${hoje}`);
-
-  const missas = await supabaseGet(
-    `missas?select=id,data_missa,horario,local,observacao,ativo&ativo=eq.true&data_missa=gte.${hoje}&order=data_missa.asc,horario.asc`
+  const resposta = await fetch(
+    `${EVOLUTION_URL}/message/sendText/${EVOLUTION_INSTANCE}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: EVOLUTION_API_KEY
+      },
+      body: JSON.stringify({
+        number: GROUP_JID,
+        text: texto
+      })
+    }
   );
 
-  const elegiveis = missas
-    .map(m => ({ ...m, dias: daysBetween(hoje, m.data_missa) }))
-    .filter(m => [5, 3, 1].includes(m.dias));
-
-  if (!elegiveis.length) {
-    console.log("Nenhum lembrete de 5, 3 ou 1 dia para enviar hoje.");
-    return;
+  if (!resposta.ok) {
+    throw new Error(await resposta.text());
   }
+}
 
-  for (const missa of elegiveis) {
-    try {
-      if (await reminderAlreadySent(missa.id, missa.dias)) {
-        console.log(`Ignorado: missa ${missa.id}, lembrete ${missa.dias} dia(s) já enviado.`);
+async function executarLembretes() {
+  try {
+    const hoje = new Date().toLocaleDateString("sv-SE", {
+      timeZone: TIMEZONE
+    });
+
+    const missas = await buscarMissasAtivas();
+
+    for (const missa of missas) {
+      const diasAntes = diasEntre(hoje, missa.data_missa);
+
+      if (![5, 3, 1].includes(diasAntes)) {
         continue;
       }
 
-      await sendWhatsApp(messageFor(missa, missa.dias));
+      const enviado = await lembreteJaEnviado(
+        missa.id,
+        diasAntes
+      );
 
-      await supabaseInsert("lembretes_missas", {
-        missa_id: missa.id,
-        dias_antes: missa.dias,
-        data_envio: hoje,
-        horario_envio: "09:00:00",
-        enviado: true,
-        enviado_em: new Date().toISOString()
-      });
+      if (enviado) {
+        continue;
+      }
 
-      console.log(`Enviado com sucesso: missa ${missa.id}, ${missa.dias} dia(s) antes.`);
-    } catch (err) {
-      console.error(`Falha na missa ${missa.id}: ${err.message}`);
+      await enviarWhatsApp(missa, diasAntes);
+      await registrarLembrete(missa.id, diasAntes);
+
+      console.log(
+        `Lembrete enviado: missa ${missa.id}, ${diasAntes} dia(s) antes`
+      );
     }
+  } catch (erro) {
+    console.error("Erro no agendador:", erro.message);
   }
 }
 
-console.log(`Agenda de Missas ativa. Disparo diário às 09:00 (${TIMEZONE}).`);
-
 cron.schedule(
   "0 9 * * *",
-  () => runCheck().catch(err => console.error(`Erro geral: ${err.message}`)),
-  { timezone: TIMEZONE }
+  executarLembretes,
+  {
+    timezone: TIMEZONE
+  }
 );
+
+const app = express();
+
+app.use(express.json());
+
+app.get("/api/missas", async (req, res) => {
+  try {
+    const hoje = new Date().toLocaleDateString("sv-SE", {
+      timeZone: TIMEZONE
+    });
+
+    const resposta = await fetch(
+      `${SUPABASE_URL}/rest/v1/missas?select=*&data_missa=gte.${hoje}&order=data_missa.asc,horario.asc`,
+      {
+        headers: sbHeaders
+      }
+    );
+
+    const dados = await resposta.json();
+
+    if (!resposta.ok) {
+      return res.status(resposta.status).json({
+        erro: dados.message || "Erro ao buscar missas."
+      });
+    }
+
+    res.json(dados);
+  } catch (erro) {
+    res.status(500).json({
+      erro: erro.message
+    });
+  }
+});
+
+app.post("/api/missas", async (req, res) => {
+  try {
+    const {
+      data_missa,
+      horario,
+      local,
+      observacao
+    } = req.body || {};
+
+    if (!data_missa || !horario || !local) {
+      return res.status(400).json({
+        erro: "Data, horário e local são obrigatórios."
+      });
+    }
+
+    const resposta = await fetch(
+      `${SUPABASE_URL}/rest/v1/missas`,
+      {
+        method: "POST",
+        headers: {
+          ...sbHeaders,
+          Prefer: "return=representation"
+        },
+        body: JSON.stringify({
+          data_missa,
+          horario,
+          local,
+          observacao: observacao || null,
+          ativo: true
+        })
+      }
+    );
+
+    const dados = await resposta.json();
+
+    if (!resposta.ok) {
+      return res.status(resposta.status).json({
+        erro: dados.message || "Erro ao cadastrar missa."
+      });
+    }
+
+    res.status(201).json(dados);
+  } catch (erro) {
+    res.status(500).json({
+      erro: erro.message
+    });
+  }
+});
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+app.use(express.static(path.join(__dirname, "public")));
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(
+    `Agenda de Missas ativa. Disparo diário às 09:00 (${TIMEZONE}).`
+  );
+  console.log(`Tela disponível na porta ${PORT}.`);
+});
